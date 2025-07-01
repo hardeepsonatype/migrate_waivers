@@ -2,6 +2,9 @@
 
 This repository contains a pair of Python scripts to perform a two-step migration of policy waivers from a source Sonatype IQ Server to a new destination instance. The process involves first extracting all waivers from the source server into a JSON file, and then using that file to recreate the waivers on the destination server.
 
+## NOTE: THESE SCRIPTS WILL MIGRATE LIFECYCLE WAIVERS ONLY - NOT REPOSITORY (FIREWALL) WAIVERS
+## PLEASE TEST THOROUGHLY BEFORE APPLYING TO PRODUCTION - USE OF THESE SCRIPTS IS NOT SUPPORTED BY SONATYPE
+
 ## Overview
 
 Migrating Sonatype IQ instances requires a manual process for transferring existing policy waivers. These scripts automate that workflow:
