@@ -43,3 +43,61 @@ Run the script from your terminal, providing the URL and credentials for your **
 
 ```shell
 python get_waivers.py --url <SOURCE_IQ_URL> --user <SOURCE_USERNAME> --password <SOURCE_PASSWORD>
+```
+
+* `--url`: The base URL of your **source** Sonatype IQ Server (e.g., `http://iq-source.example.com:8070`).
+* `--user`: The username for authentication with the source server.
+* `--password`: The password for the specified user.
+
+This will create a file named **`all_policy_waivers.json`** in the same directory. This file is required for the next step.
+
+#### **Example**
+
+```shell
+python get_waivers.py \
+    --url "http://iq-prod-instance:8070" \
+    --user "service-account" \
+    --password "secret_password_1"
+```
+
+---
+
+### Step 2: Migrate Waivers to Destination IQ Server
+
+This script uses the `all_policy_waivers.json` file to apply the waivers to your new destination instance.
+
+**Script:** `migrate_waivers.py`
+
+#### **How it Works**
+
+The script intelligently recreates waivers by:
+
+1.  Fetching all applications, organizations, and current policy violations from the new destination server.
+2.  Reading each waiver from the `all_policy_waivers.json` file.
+3.  Matching the component, vulnerability, and scope of the old waiver to an active violation on the new server.
+4.  If a match is found, it creates a new waiver on the destination server with the original comment.
+
+#### **Usage**
+
+Run the script from your terminal, providing the path to the waivers file and the credentials for your **destination** IQ Server.
+
+```shell
+python migrate_waivers.py --waivers-file all_policy_waivers.json --url <DESTINATION_IQ_URL> --user <DESTINATION_USERNAME> --password <DESTINATION_PASSWORD>
+```
+
+* `--waivers-file`: The path to the JSON file created in Step 1 (e.g., `all_policy_waivers.json`).
+* `--url`: The base URL of your **destination** Sonatype IQ Server (e.g., `http://iq-new.example.com:8070`).
+* `--user`: The username for authentication with the destination server.
+* `--password`: The password for the specified user.
+
+#### **Example**
+
+```shell
+python migrate_waivers.py \
+    --waivers-file "./all_policy_waivers.json" \
+    --url "http://localhost:8070" \
+    --user "admin" \
+    --password "admin123"
+```
+
+Upon completion, the script will print a summary of successful, failed, and skipped waivers.
