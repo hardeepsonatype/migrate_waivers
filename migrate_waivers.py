@@ -7,11 +7,61 @@ import re
 from requests.auth import HTTPBasicAuth
 from typing import Union, Dict, Any, Tuple
 
-# --- Configuration ---
-# Set up logging to provide feedback on the script's progress
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 # --- Helper Functions ---
+
+def setup_logging(verbose: bool, log_file: str = None):
+    """
+    Configures logging to console and optionally to a file.
+
+    - Console logging:
+        - Non-verbose mode: Logs INFO level and above.
+        - Verbose mode: Logs DEBUG level and above.
+    - File logging (if log_file is specified):
+        - Non-verbose mode: Logs INFO level and above.
+        - Verbose mode: Logs DEBUG level and above.
+    - The log file is overwritten on each run.
+
+    Args:
+        verbose (bool): If True, enables verbose (DEBUG) logging for all handlers.
+        log_file (str, optional): Path to a file for storing logs. Defaults to None.
+    """
+    # Use a specific format for log messages
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    formatter = logging.Formatter(log_format)
+    
+    # Get the root logger. Setting its level to DEBUG captures all messages;
+    # the handlers will then filter them based on their own configured levels.
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # Clear any existing handlers to prevent duplicate log output
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # Configure the console (stream) handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    if verbose:
+        console_handler.setLevel(logging.DEBUG)
+    else:
+        console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # Configure the file handler if a log file path is provided
+    if log_file:
+        try:
+            # Use 'w' mode to overwrite the log file on each execution
+            file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+            if verbose:
+                file_handler.setLevel(logging.DEBUG) # Log DEBUG and higher in verbose mode
+            else:
+                file_handler.setLevel(logging.INFO) # Log INFO and higher in standard mode
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+            logging.info(f"Logging to file enabled. Output will be saved to: {log_file}")
+        except IOError as e:
+            logging.error(f"Could not open log file '{log_file}' for writing. Error: {e}")
+            # The script will continue with console logging only.
 
 def make_comp_key(component_identifier: dict) -> tuple:
     """Creates a stable, hashable tuple from a component identifier dictionary."""
@@ -36,9 +86,11 @@ def extract_vuln_id_from_reason(reason: str) -> Union[str, None]:
     """Extracts a CVE or Sonatype ID from a policy violation condition reason string."""
     if not reason:
         return None
+    # Regex to find standard CVE formats (e.g., CVE-2021-44228)
     cve_match = re.search(r'(CVE-\d{4}-\d{4,})', reason)
     if cve_match:
         return cve_match.group(1)
+    # Regex to find Sonatype vulnerability identifiers (e.g., sonatype-2022-1234)
     sonatype_match = re.search(r'(sonatype-\d{4}-\d{4,})', reason)
     if sonatype_match:
         return sonatype_match.group(1)
@@ -47,6 +99,7 @@ def extract_vuln_id_from_reason(reason: str) -> Union[str, None]:
 def get_all_applications(iq_url: str, auth: HTTPBasicAuth) -> list:
     """Fetches all applications and returns the full list of application objects."""
     api_path = "/api/v2/applications"
+    logging.debug(f"Fetching all applications from {iq_url}{api_path}")
     try:
         response = requests.get(f"{iq_url}{api_path}", auth=auth)
         response.raise_for_status()
@@ -60,6 +113,7 @@ def get_all_applications(iq_url: str, auth: HTTPBasicAuth) -> list:
 def get_all_organizations(iq_url: str, auth: HTTPBasicAuth) -> dict:
     """Fetches all organizations and returns a map of {name: internalId}."""
     api_path = "/api/v2/organizations"
+    logging.debug(f"Fetching all organizations from {iq_url}{api_path}")
     try:
         response = requests.get(f"{iq_url}{api_path}", auth=auth)
         response.raise_for_status()
@@ -76,22 +130,26 @@ def get_all_violations(iq_url: str, auth: HTTPBasicAuth, applications: list) -> 
     The map key is a tuple: (app_public_id, component_key, vulnerability_id)
     """
     violation_map = {}
-    logging.info("Starting to fetch all policy violations from the new server by checking ALL scans. This may take a moment...")
+    logging.info("Starting to fetch all policy violations from the new server. This may take a moment...")
 
     for app in applications:
         app_public_id = app.get('publicId')
         app_internal_id = app.get('id')
         if not all([app_public_id, app_internal_id]):
             continue
+        
+        logging.debug(f"Checking reports for application: {app.get('name')} ({app_public_id})")
         try:
             reports_path = f"/api/v2/reports/applications/{app_internal_id}"
             reports_response = requests.get(f"{iq_url}{reports_path}", auth=auth)
-            if reports_response.status_code == 404: continue
+            if reports_response.status_code == 404:
+                logging.debug(f"No reports endpoint found for application '{app_public_id}', skipping.")
+                continue
             reports_response.raise_for_status()
             reports = reports_response.json()
 
             if not reports:
-                logging.warning(f"No reports found for application '{app_public_id}'.")
+                logging.debug(f"No reports found for application '{app_public_id}'.")
                 continue
 
             for report in reports:
@@ -130,6 +188,7 @@ def get_all_violations(iq_url: str, auth: HTTPBasicAuth, applications: list) -> 
                                 if vuln_id:
                                     key = (app_public_id, comp_key, vuln_id)
                                     violation_map[key] = violation_id
+                                    logging.debug(f"Mapped violation: App='{app_public_id}', Vuln='{vuln_id}', ViolationID='{violation_id}'")
 
         except requests.exceptions.RequestException as e:
             logging.warning(f"Could not process reports for application '{app_public_id}': {e}")
@@ -149,9 +208,10 @@ def create_waiver(iq_url: str, auth: HTTPBasicAuth, owner_type: str, owner_id: s
         "matcherStrategy": source_waiver.get("matcherStrategy", "EXACT_COMPONENT")
     }
     
-    logging.info(f"Attempting to create waiver at endpoint: {iq_url}{api_path}")
-    logging.info("Using payload:")
-    logging.info(json.dumps(waiver_payload, indent=4))
+    logging.info(f"Attempting to create waiver for violation '{violation_id}' at {owner_type} '{owner_id}'.")
+    logging.debug(f"Waiver request endpoint: {iq_url}{api_path}")
+    # The payload is logged at DEBUG level to avoid cluttering standard output
+    logging.debug(f"Waiver request payload: {json.dumps(waiver_payload, indent=2)}")
 
     try:
         response = requests.post(f"{iq_url}{api_path}", auth=auth, json=waiver_payload)
@@ -179,12 +239,12 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
     logging.info("--- Starting Waiver Migration Process ---")
     
     applications = get_all_applications(iq_url, auth)
-    app_map = {app['publicId']: app for app in applications} # Map publicId to full app object
     org_map = get_all_organizations(iq_url, auth)
     violation_map = get_all_violations(iq_url, auth, applications)
 
     if not violation_map:
         logging.warning("No applicable policy violations found on the new server. Cannot migrate any waivers.")
+        return
 
     success_count = 0
     failure_count = 0
@@ -197,7 +257,8 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
         logging.info(f"Loaded {len(source_waivers)} waivers to migrate from '{waivers_path}'.")
 
         for i, waiver in enumerate(source_waivers):
-            row_num = i + 1
+            row_num = i + 1 # Use 1-based index for user-friendly logging
+            logging.debug(f"--- Processing source waiver #{row_num} ---")
             
             scope_name = waiver.get('scopeOwnerName')
             owner_type = waiver.get('scopeOwnerType')
@@ -205,6 +266,7 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
             vuln_id = waiver.get('vulnerabilityId')
 
             if not all([scope_name, owner_type, comp_identifier, vuln_id]):
+                logging.error(f"Row {row_num}: Skipping waiver due to missing essential data (scope, type, component, or vulnerabilityId).")
                 failure_count += 1
                 continue
 
@@ -225,10 +287,10 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
                     api_owner_id = scope_name
             
             elif owner_type == 'organization':
-                logging.info(f"Row {row_num}: This is an Organization waiver for '{scope_name}'. Searching for a match in any of its applications...")
+                logging.debug(f"Row {row_num}: This is an Organization waiver for '{scope_name}'. Searching for a match in its applications...")
                 org_internal_id = org_map.get(scope_name)
                 if not org_internal_id:
-                    logging.error(f"Row {row_num}: Could not find organization '{scope_name}' on the new server.")
+                    logging.warning(f"Row {row_num}: Could not find organization '{scope_name}' on the new server. Skipping.")
                     skipped_count += 1
                     continue
                 
@@ -239,26 +301,26 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
                     if violation_id_to_waive:
                         api_owner_type = 'organization'
                         api_owner_id = org_internal_id
-                        logging.info(f"  --> Found a match in application '{app_in_org}' with violation ID '{violation_id_to_waive}'. Will waive at Organization level.")
+                        logging.info(f"  --> Row {row_num}: Found match in app '{app_in_org}' (violation ID '{violation_id_to_waive}'). Will waive at Organization level '{scope_name}'.")
                         break
 
             elif owner_type == 'root_organization':
-                logging.info(f"Row {row_num}: This is a Root Organization waiver. Searching for a match in any application...")
+                logging.debug(f"Row {row_num}: This is a Root Organization waiver. Searching for a match in any application...")
                 for (dest_app_id, dest_comp_key, dest_vuln_id), dest_violation_id in violation_map.items():
                     if comp_key == dest_comp_key and vuln_id == dest_vuln_id:
                         violation_id_to_waive = dest_violation_id
                         api_owner_type = 'organization'
-                        api_owner_id = 'ROOT_ORGANIZATION_ID'
-                        logging.info(f"  --> Found a match in application '{dest_app_id}' with violation ID '{violation_id_to_waive}'. Will waive at Root Organization level.")
+                        api_owner_id = 'ROOT_ORGANIZATION_ID' 
+                        logging.info(f"  --> Row {row_num}: Found match in app '{dest_app_id}' (violation ID '{violation_id_to_waive}'). Will waive at Root Organization level.")
                         break 
             
             if not violation_id_to_waive:
-                logging.warning(f"Row {row_num}: --> No matching violation found in map for waiver on {scope_name}. Skipping.")
+                logging.warning(f"Row {row_num}: No matching violation found for waiver on '{scope_name}' with component '{comp_identifier.get('coordinates', {})}' and vuln '{vuln_id}'. Skipping.")
                 skipped_count += 1
                 continue
             
             if not api_owner_id:
-                logging.error(f"Row {row_num}: Could not determine API owner ID for scope '{scope_name}'. Skipping.")
+                logging.error(f"Row {row_num}: Could not determine API owner ID for scope '{scope_name}'. This should not happen if a violation was found. Skipping.")
                 failure_count += 1
                 continue
 
@@ -268,10 +330,10 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
                 failure_count += 1
 
     except FileNotFoundError:
-        logging.critical(f"The file '{waivers_path}' was not found.")
+        logging.critical(f"Error: The file '{waivers_path}' was not found.")
         sys.exit(1)
     except json.JSONDecodeError:
-        logging.critical(f"The file '{waivers_path}' is not a valid JSON file.")
+        logging.critical(f"Error: The file '{waivers_path}' is not a valid JSON file.")
         sys.exit(1)
     except Exception as e:
         logging.critical(f"An unexpected error occurred: {e}", exc_info=True)
@@ -286,12 +348,32 @@ def migrate_waivers(waivers_path: str, iq_url: str, auth: HTTPBasicAuth):
 # --- Script Execution ---
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Migrate Sonatype IQ policy waivers from a JSON export to a new IQ Server instance.")
+    parser = argparse.ArgumentParser(
+        description="Migrate Sonatype IQ policy waivers from a JSON export to a new IQ Server instance.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    # Required arguments for server connection and data file
     parser.add_argument("--waivers-file", required=True, help="Path to the source waivers JSON file (e.g., instance1_waivers.json).")
     parser.add_argument("-u", "--url", required=True, help="Base URL of the new Sonatype IQ Server (e.g., http://iq-server:8070).")
     parser.add_argument("-a", "--user", required=True, help="Username for authentication with the IQ Server.")
     parser.add_argument("-p", "--password", required=True, help="Password for authentication with the IQ Server.")
     
+    # Optional arguments for controlling log output
+    parser.add_argument(
+        "--log-file",
+        help="Optional. Path to a file to store all log output (e.g., migration.log).\n"
+             "The file will be overwritten on each run."
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Optional. Enable verbose console output to show detailed debug messages."
+    )
+
     args = parser.parse_args()
+
+    # Set up logging based on the provided command-line arguments
+    setup_logging(args.verbose, args.log_file)
+    
     iq_auth = HTTPBasicAuth(args.user, args.password)
     migrate_waivers(args.waivers_file, args.url, iq_auth)
