@@ -99,6 +99,13 @@ python migrate_waivers.py \
 * `--user`: The username for authentication with the destination server.
 * `--password`: The password for the specified user.
 
+#### **Optional Parameters**
+
+* `--cache-dir <DIRECTORY>`: Specifies a directory to store cache files (e.g., application and violation data). Using a cache can significantly speed up subsequent runs. Defaults to `./.waiver_cache`.
+* `--force-fetch`: Forces the script to fetch fresh data from the IQ Server's APIs, ignoring any existing files in the cache directory.
+* `--log-file <FILE_PATH>`: Writes all log output to the specified file. The file is overwritten on each run.
+* `--verbose`: Enables detailed debug-level logging to the console, which is helpful for troubleshooting.
+
 #### **Example**
 
 ```shell
@@ -107,7 +114,9 @@ python migrate_waivers.py \
     --waiver-details-csv "./results-waivers.csv" \
     --url "http://localhost:8070" \
     --user "admin" \
-    --password "admin123"
+    --password "admin123" \
+    --verbose \
+    --log-file "migration.log"
 ```
 
 Upon completion, the script will print a summary of successful, failed, and skipped waivers.
