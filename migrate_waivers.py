@@ -275,20 +275,40 @@ def create_waiver(iq_url: str, auth: HTTPBasicAuth, owner_type: str, owner_id: s
         "matcherStrategy": source_waiver.get("matcherStrategy", "EXACT_COMPONENT")
     }
 
-    creator_name = source_waiver.get("creatorName")
-    source_comment = source_waiver.get("comment")
+    creator_name = source_waiver.get("creatorName", "").strip()
+    source_comment = source_waiver.get("comment", "").strip()
     
-    final_comment_parts = []
-    if creator_name and creator_name.strip():
-        final_comment_parts.append(creator_name.strip())
+    # --- Comment Truncation Logic ---
+    MAX_COMMENT_LENGTH = 1000
+    TRUNCATION_MARKER = "..."
     
-    if source_comment and source_comment.strip():
-        final_comment_parts.append(source_comment.strip())
+    creator_prefix = ""
+    if creator_name:
+        creator_prefix = f"{creator_name} - "
 
-    if final_comment_parts:
-        waiver_payload["comment"] = " - ".join(final_comment_parts)
-    else:
-        waiver_payload["comment"] = "Waiver migrated from previous IQ Server."
+    final_comment = f"{creator_prefix}{source_comment}"
+
+    # Set a default comment if the combination is empty
+    if not final_comment.strip():
+        final_comment = "Waiver migrated from previous IQ Server."
+
+    # Truncate if the final comment is too long
+    if len(final_comment) > MAX_COMMENT_LENGTH:
+        logging.warning(f"Comment for waiver on violation '{violation_id}' is too long ({len(final_comment)} chars). Truncating.")
+        
+        # Calculate how much space the original comment part can take
+        available_length = MAX_COMMENT_LENGTH - len(creator_prefix) - len(TRUNCATION_MARKER)
+        
+        if available_length < 0:
+            # This handles the edge case where the creator_prefix itself is too long.
+            # We truncate the prefix and don't add any of the original comment.
+            final_comment = creator_prefix[:MAX_COMMENT_LENGTH - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+        else:
+            truncated_source_comment = source_comment[:available_length] + TRUNCATION_MARKER
+            final_comment = f"{creator_prefix}{truncated_source_comment}"
+
+    waiver_payload["comment"] = final_comment
+    # --- End of Comment Truncation Logic ---
 
     source_reason_id = source_waiver.get("policyWaiverReasonId")
     if source_reason_id:
@@ -316,6 +336,8 @@ def create_waiver(iq_url: str, auth: HTTPBasicAuth, owner_type: str, owner_id: s
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to create waiver for violation ID {violation_id}. Error: {e}")
         if e.response:
+            # The API returns a 400 with a message for long comments.
+            # This log will capture "Comment length must not exceed 1000 characters".
             logging.error(f"Response body: {e.response.text}")
         return False
 
